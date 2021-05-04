@@ -4,7 +4,7 @@ from datetime import datetime
 
 import torch
 import torchvision
-from torch.utils.data import ConcatDataset, Sampler
+from torch.utils.data import ConcatDataset, Sampler, Dataset
 
 from code.datasets.clustering.truncated_dataset import TruncatedDataset
 from code.utils.cluster.transforms import sobel_make_transforms, \
@@ -599,3 +599,150 @@ class DeterministicRandomSampler(Sampler):
 
   def __len__(self):
     return len(self.data_source)
+
+
+
+
+class MyCustomDataset(Dataset):
+  def __init__(self, img_tensor, transformations):
+    super(MyDataset, self).__init__()
+    self.img_tensor = img_tensor #img_tensor is of shape (640000, 1, 28, 28)
+    self.transformations = transformations # this is for examle tf1 which is made by using composation of tranforms in pytorch
+
+  def __len__(self):
+    return len(self.img_tensor)
+
+  def __getitem__(self, idx):
+    img = self.img_tensor[idx]
+    # img = torchvision.transforms.functional.to_pil_image(img) # - toPIL image not used here ,used in transforms.py instead
+    return self.transformations(img)
+
+
+
+def custom_2head_dataloader(config):
+  '''my custom dataloader to load custom images/data for unsupervisde clustering'''
+
+  greyscale = True #for my custom data
+  train_data_path = os.path.join(config.dataset_root, "train")
+  test_val_data_path = os.path.join(config.dataset_root, "none")
+  test_data_path = os.path.join(config.dataset_root, "none")
+  assert (config.batchnorm_track)  # recommended (for test time invariance to batch size)
+
+  # Transforms:
+  if greyscale:
+    tf1, tf2, tf3 = greyscale_make_transforms(config)
+  else:
+    tf1, tf2, tf3 = sobel_make_transforms(config)
+
+"""
+  #load the digits(of the visual sudoku) dataset from either
+  1. numpy files
+  2. original sudoku images and cut 64 smaller images
+
+  for now using just numpy files saved earlier
+"""
+
+  path='/content/drive/MyDrive/DL_Ass2/Assignment 2/'
+  dataset_path_query = path+'visual_sudoku/train/query/'
+  dataset_path_target = path+'visual_sudoku/train/target/'
+
+  X_target=np.load('/content/drive/MyDrive/DL_Ass2/target_64k_images.npy')
+  X_query=np.load('/content/drive/MyDrive/DL_Ass2/query_64k_images.npy')
+
+  X = np.concatenate((X_query, X_target))
+
+  oneshot_data=np.load(path+'sample_images.npy')
+  print('shape of oneshot_data', oneshot_data.shape)
+
+  #applying minibatch kmeans
+  X = ((X.reshape(-1, 1, 28, 28))/255.)
+
+  # X=X.reshape((-1,28*28)) #shape 640k, 784
+  x_oneshot = (oneshot_data.reshape((-1, 1, 28, 28))/(255.)) #shape 10, 784
+  x_oneshot_target = x_oneshot[:-1] #from 0th class to 8th class, 9th dropped as its no where in the images most probably
+  X = np.concatenate((X, x_oneshot_target))
+
+
+  print('shape of X', X.shape)
+  print('shape of x_oneshot', x_oneshot.shape)
+  print('shape of x_oneshot_target', x_oneshot_target.shape)
+
+  print('X \n', X)
+  print('x_oneshot \n', x_oneshot)
+  print('x_oneshot_target \n', x_oneshot_target)
+
+
+
+  # Training data:
+  # main output head (B), auxiliary overclustering head (A), same data for both
+
+  # dataset_head_B = torchvision.datasets.ImageFolder(root=train_data_path, transform=tf1),
+  # datasets_tf_head_B = [torchvision.datasets.ImageFolder(root=train_data_path, transform=tf2)
+  #                       for _ in range(config.num_dataloaders)]
+  dataset_head_B = MyCustomDataset(X, tf1)
+  datasets_tf_head_B = [MyCustomDataset(X, tf2)
+                        for _ in range(config.num_dataloaders)]
+  dataloaders_head_B = [torch.utils.data.DataLoader(
+    dataset_head_B,
+    batch_size=config.dataloader_batch_sz,
+    shuffle=False,
+    sampler=DeterministicRandomSampler(dataset_head_B),
+    num_workers=0,
+    drop_last=False)] + \
+                       [torch.utils.data.DataLoader(
+                         datasets_tf_head_B[i],
+                         batch_size=config.dataloader_batch_sz,
+                         shuffle=False,
+                         sampler=DeterministicRandomSampler(datasets_tf_head_B[i]),
+                         num_workers=0,
+                         drop_last=False) for i in range(config.num_dataloaders)]
+
+
+
+
+  dataset_head_A = MyCustomDataset(X, tf1)
+  datasets_tf_head_A = [MyCustomDataset(X, tf2)
+                        for _ in range(config.num_dataloaders)]
+  # dataset_head_A = torchvision.datasets.ImageFolder(root=train_data_path, transform=tf1)
+  # datasets_tf_head_A = [torchvision.datasets.ImageFolder(root=train_data_path, transform=tf2)
+  #                       for _ in range(config.num_dataloaders)]
+  dataloaders_head_A = [torch.utils.data.DataLoader(
+    dataset_head_A,
+    batch_size=config.dataloader_batch_sz,
+    shuffle=False,
+    sampler=DeterministicRandomSampler(dataset_head_A),
+    num_workers=0,
+    drop_last=False)] + \
+                       [torch.utils.data.DataLoader(
+                         datasets_tf_head_A[i],
+                         batch_size=config.dataloader_batch_sz,
+                         shuffle=False,
+                         sampler=DeterministicRandomSampler(datasets_tf_head_A[i]),
+                         num_workers=0,
+                         drop_last=False) for i in range(config.num_dataloaders)]
+
+
+
+  # Testing data (labelled):
+  mapping_assignment_dataloader, mapping_test_dataloader = None, None
+  if os.path.exists(test_data_path):
+    mapping_assignment_dataset = torchvision.datasets.ImageFolder(test_val_data_path, transform=tf3)
+    mapping_assignment_dataloader = torch.utils.data.DataLoader(
+      mapping_assignment_dataset,
+      batch_size=config.batch_sz,
+      shuffle=False,
+      sampler=DeterministicRandomSampler(mapping_assignment_dataset),
+      num_workers=0,
+      drop_last=False)
+
+    mapping_test_dataset = torchvision.datasets.ImageFolder(test_data_path, transform=tf3)
+    mapping_test_dataloader = torch.utils.data.DataLoader(
+      mapping_test_dataset,
+      batch_size=config.batch_sz,
+      shuffle=False,
+      sampler=DeterministicRandomSampler(mapping_test_dataset),
+      num_workers=0,
+      drop_last=False)
+
+  return dataloaders_head_A, dataloaders_head_B, \
+         mapping_assignment_dataloader, mapping_test_dataloader

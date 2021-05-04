@@ -17,7 +17,7 @@ import matplotlib.pyplot as plt
 
 import code.archs as archs
 from code.utils.cluster.general import config_to_str, get_opt, update_lr, nice
-from code.utils.cluster.data import cluster_twohead_create_dataloaders
+from code.utils.cluster.data import custom_2head_dataloader
 from code.utils.cluster.cluster_eval import cluster_eval, get_subhead_using_loss
 from code.utils.cluster.IID_losses import IID_loss
 from code.utils.cluster.render import save_progress
@@ -176,7 +176,7 @@ else:
 def train(render_count=-1):
   dataloaders_head_A, dataloaders_head_B, \
   mapping_assignment_dataloader, mapping_test_dataloader = \
-    cluster_twohead_create_dataloaders(config)
+    custom_2head_dataloader(config)
 
   net = archs.__dict__[config.arch](config)
   if config.restart:

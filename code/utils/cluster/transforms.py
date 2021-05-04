@@ -109,9 +109,14 @@ def sobel_make_transforms(config, random_affine=False,
                           cutout_p=None,
                           cutout_max_box=None,
                           affine_p=None):
-  tf1_list = []
-  tf2_list = []
-  tf3_list = []
+  """
+  i have changed the 3 lines below this, ie, 
+  instead of empty list we are having transformations 
+  which convert tensor to pil image first
+  """
+  tf1_list = [torchvision.transforms.ToPILImage()]
+  tf2_list = [torchvision.transforms.ToPILImage()]
+  tf3_list = [torchvision.transforms.ToPILImage()]
   if config.crop_orig:
     tf1_list += [
       torchvision.transforms.RandomCrop(tuple(np.array([config.rand_crop_sz,
